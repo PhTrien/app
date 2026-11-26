@@ -97,6 +97,18 @@ if [[ "${UPGRADE:-0}" == "1" ]]; then
   install_binary
   systemctl restart "${APP_NAME}"
   ok "Đã cập nhật. Kiểm tra: systemctl status ${APP_NAME}"
+  UP_HOST="$(python3 - "$CONF_FILE" <<'PYEOF'
+import json,sys
+try:
+    print(json.load(open(sys.argv[1]))["host"])
+except Exception:
+    print("TEN_MIEN")
+PYEOF
+)"
+  echo
+  echo "  Trang quản trị: https://${UP_HOST}/admin"
+  echo "  Nếu quên mật khẩu: ${APP_NAME} admin reset --password MATKHAU_MOI"
+  echo
   exit 0
 fi
 
@@ -194,10 +206,16 @@ cat <<EOF
    3. Cài đặt chung → Giới thiệu → Cài đặt tin cậy chứng nhận → bật "${CA_NAME}"
    4. Mở Locket và kiểm tra Gold
 
+ Tạo mã kích hoạt Gold (theo username):
+   Mở https://${HOST}/admin  →  đăng nhập bằng mật khẩu admin ở trên
+   Tab "Mã kích hoạt" → chọn thời hạn → Tạo mã → gửi khách
+   Khách vào https://${HOST}/kich-hoat nhập username + mã
+
  Lệnh hữu ích:
    systemctl status ${APP_NAME}        # trạng thái
    journalctl -u ${APP_NAME} -f        # log trực tiếp
    ${APP_NAME} selftest                # tự kiểm tra
    ${APP_NAME} ca show                 # thông tin Root CA
+   ${APP_NAME} admin reset --password MỚI   # đổi mật khẩu quản trị
 ──────────────────────────────────────────────
 EOF

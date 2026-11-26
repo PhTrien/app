@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
@@ -28,9 +29,10 @@ import (
 	"github.com/PhTrien/app/internal/mock"
 	"github.com/PhTrien/app/internal/pki"
 	"github.com/PhTrien/app/internal/profile"
+	"github.com/PhTrien/app/internal/store"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 
 func main() {
 	args := os.Args[1:]
@@ -51,6 +53,8 @@ func main() {
 		fmt.Printf("locket-gold %s\n", version)
 	case "ca":
 		caCmd(args)
+	case "admin":
+		adminCmd(args)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -67,6 +71,7 @@ func usage() {
   locket-gold run       [--config /etc/locket-gold/config.json]
   locket-gold selftest  [--config /etc/locket-gold/config.json]
   locket-gold ca show   [--config ...]
+  locket-gold admin reset [--password MỚI] [--config ...]
   locket-gold version
 `)
 }
@@ -124,6 +129,11 @@ func buildBundle(cfg *config.Config, logger *log.Logger) (*bundle, error) {
 	}
 	dohHandler := doh.New(ip, cfg.IsMapped, cfg.UpstreamDNS, logger, cfg.LogRequests)
 
+	st, err := store.Open(cfg.Dir("data"))
+	if err != nil {
+		return nil, fmt.Errorf("mở kho dữ liệu: %w", err)
+	}
+
 	srv := &httpapi.Server{
 		Cfg:      cfg,
 		CA:       ca,
@@ -137,6 +147,7 @@ func buildBundle(cfg *config.Config, logger *log.Logger) (*bundle, error) {
 		Logger:   logger,
 		Version:  version,
 		Started:  time.Now(),
+		Store:    st,
 	}
 	return &bundle{srv: srv, cfg: cfg, ca: ca, leaf: leaf, logger: logger}, nil
 }
@@ -155,6 +166,17 @@ func runCmd(args []string) {
 	b, err := buildBundle(cfg, logger)
 	if err != nil {
 		log.Fatalf("%v", err)
+	}
+
+	// Mật khẩu admin: ưu tiên bản đã đổi trong /admin, sau đó tới config,
+	// cuối cùng sinh mới và in ra một lần.
+	if !b.srv.Store.HasPassword() && cfg.AdminPassword == "" {
+		pw := randomPassword(12)
+		cfg.AdminPassword = pw
+		if err := cfg.Save(); err != nil {
+			logger.Printf("cảnh báo: không ghi được mật khẩu admin vào config: %v", err)
+		}
+		logger.Printf("mật khẩu admin mới: %s  (đổi tại https://%s/admin)", pw, cfg.Host)
 	}
 
 	// Chứng chỉ cho tên miền DoH: ưu tiên Let's Encrypt, nếu chưa có thì dùng CA nội bộ.
@@ -268,6 +290,67 @@ func initCmd(args []string) {
 	fmt.Printf("Profile        : https://%s/p/locket.mobileconfig\n", cfg.Host)
 	fmt.Printf("DoH endpoint   : https://%s/dns-query\n", cfg.Host)
 	fmt.Printf("Filter catalog : %d filter\n\n", len(b.srv.Catalog.Order))
+
+	// Mật khẩu admin cho lần cài đầu.
+	if cfg.AdminPassword == "" {
+		cfg.AdminPassword = randomPassword(12)
+		if err := cfg.Save(); err != nil {
+			log.Fatalf("ghi mật khẩu admin: %v", err)
+		}
+	}
+	fmt.Printf("Trang quản trị : https://%s/admin\n", cfg.Host)
+	fmt.Printf("Mật khẩu admin : %s\n", cfg.AdminPassword)
+	fmt.Printf("Đổi mật khẩu   : locket-gold admin reset --password MATKHAU_MOI\n\n")
+}
+
+// randomPassword sinh mật khẩu dễ đọc (bỏ ký tự dễ nhầm).
+func randomPassword(n int) string {
+	const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		for i := range b {
+			b[i] = alphabet[i%len(alphabet)]
+		}
+		return string(b)
+	}
+	for i := range b {
+		b[i] = alphabet[int(b[i])%len(alphabet)]
+	}
+	return string(b)
+}
+
+// adminCmd đổi mật khẩu trang quản trị.
+func adminCmd(args []string) {
+	if len(args) == 0 || args[0] != "reset" {
+		fmt.Println("dùng: locket-gold admin reset [--password MẬT_KHẨU_MỚI]")
+		return
+	}
+	fs := flag.NewFlagSet("admin reset", flag.ExitOnError)
+	cfgPath := fs.String("config", "/etc/locket-gold/config.json", "cấu hình")
+	pw := fs.String("password", "", "mật khẩu mới (bỏ trống để sinh ngẫu nhiên)")
+	_ = fs.Parse(args[1:])
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	st, err := store.Open(cfg.Dir("data"))
+	if err != nil {
+		log.Fatalf("mở kho dữ liệu: %v", err)
+	}
+	newPw := strings.TrimSpace(*pw)
+	if newPw == "" {
+		newPw = randomPassword(12)
+	}
+	if err := st.SetPassword(newPw); err != nil {
+		log.Fatalf("đặt mật khẩu: %v", err)
+	}
+	cfg.AdminPassword = newPw
+	if err := cfg.Save(); err != nil {
+		fmt.Printf("cảnh báo: không ghi được vào config: %v\n", err)
+	}
+	fmt.Printf("Mật khẩu admin mới: %s\n", newPw)
+	fmt.Printf("Đăng nhập tại      : https://%s/admin\n", cfg.Host)
 }
 
 func caCmd(args []string) {

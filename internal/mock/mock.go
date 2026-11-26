@@ -16,18 +16,18 @@ const goldProduct = "locket_1600_1y"
 
 // Gold trả về JSON RevenueCat với entitlement Gold còn hạn rất lâu.
 func Gold(w http.ResponseWriter, r *http.Request) {
-	userID := ""
-	if i := strings.Index(r.URL.Path, "/subscribers/"); i >= 0 {
-		userID = strings.Trim(r.URL.Path[i+len("/subscribers/"):], "/")
-		if j := strings.Index(userID, "/"); j > 0 {
-			userID = userID[:j]
-		}
+	GoldUntil(w, r, subscriberID(r.URL.Path), time.Time{})
+}
+
+// GoldUntil trả metadata Gold với hạn cụ thể (zero = vĩnh viễn).
+func GoldUntil(w http.ResponseWriter, r *http.Request, userID string, exp time.Time) {
+	if userID == "" {
+		userID = subscriberID(r.URL.Path)
 	}
-	sub := subscriberPayload(userID)
 	body := map[string]any{
 		"request_date":    time.Now().UTC().Format(time.RFC3339),
 		"request_date_ms": time.Now().UnixMilli(),
-		"subscriber":      sub,
+		"subscriber":      subscriberPayload(userID, exp),
 	}
 	writeJSON(w, body)
 }
@@ -40,53 +40,75 @@ func Receipt(w http.ResponseWriter, r *http.Request) {
 	if r.Body != nil {
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in)
 	}
-	writeJSON(w, map[string]any{"subscriber": subscriberPayload(in.AppUserID)})
+	writeJSON(w, map[string]any{"subscriber": subscriberPayload(in.AppUserID, time.Time{})})
 }
 
-func subscriberPayload(userID string) map[string]any {
+// ReceiptFor trả subscriber Gold cho một app_user_id với hạn cụ thể.
+func ReceiptFor(w http.ResponseWriter, appUserID string, exp time.Time) {
+	writeJSON(w, map[string]any{"subscriber": subscriberPayload(appUserID, exp)})
+}
+
+// subscriberID lấy app_user_id từ đường dẫn /v1/subscribers/<id>.
+func subscriberID(path string) string {
+	i := strings.Index(path, "/subscribers/")
+	if i < 0 {
+		return ""
+	}
+	id := path[i+len("/subscribers/"):]
+	if j := strings.Index(id, "/"); j >= 0 {
+		id = id[:j]
+	}
+	return strings.Trim(id, "/")
+}
+
+func subscriberPayload(userID string, exp time.Time) map[string]any {
 	if userID == "" {
 		userID = "$RCAnonymousID:locket-gold"
 	}
+	expires := farFuture
+	if !exp.IsZero() {
+		expires = exp.UTC().Format(time.RFC3339)
+	}
 	subscriptions := map[string]any{
 		goldProduct: map[string]any{
-			"auto_resume_date":             nil,
-			"billing_issues_detected_at":   nil,
-			"display_name":                 goldProduct,
-			"expires_date":                 farFuture,
-			"grace_period_expires_date":    nil,
-			"is_sandbox":                   false,
-			"management_url":               "https://apps.apple.com/account/subscriptions",
-			"original_purchase_date":       past,
-			"ownership_type":               "PURCHASED",
-			"period_type":                  "normal",
-			"price":                        map[string]any{"amount": 0, "currency": "VND"},
-			"product_identifier":           goldProduct,
-			"purchase_date":                past,
-			"refunded_at":                  nil,
-			"store":                        "app_store",
-			"store_transaction_id":         "2000001108724193",
-			"unsubscribe_detected_at":      nil,
+			"auto_resume_date":           nil,
+			"billing_issues_detected_at": nil,
+			"display_name":               goldProduct,
+			"expires_date":               expires,
+			"grace_period_expires_date":  nil,
+			"is_sandbox":                 false,
+			"management_url":             "https://apps.apple.com/account/subscriptions",
+			"original_purchase_date":     past,
+			"ownership_type":             "PURCHASED",
+			"period_type":                "normal",
+			"price":                      map[string]any{"amount": 0, "currency": "VND"},
+			"product_identifier":         goldProduct,
+			"purchase_date":              past,
+			"refunded_at":                nil,
+			"store":                      "app_store",
+			"store_transaction_id":       "2000001108724193",
+			"unsubscribe_detected_at":    nil,
 		},
 	}
 	entitlements := map[string]any{
 		"Gold": map[string]any{
-			"expires_date":        farFuture,
+			"expires_date":              expires,
 			"grace_period_expires_date": nil,
-			"product_identifier":  goldProduct,
-			"purchase_date":       past,
+			"product_identifier":        goldProduct,
+			"purchase_date":             past,
 		},
 	}
 	return map[string]any{
-		"entitlements":               entitlements,
-		"first_seen":                 past,
-		"last_seen":                  time.Now().UTC().Format(time.RFC3339),
-		"management_url":             nil,
-		"non_subscriptions":          map[string]any{},
-		"original_app_user_id":       userID,
+		"entitlements":                 entitlements,
+		"first_seen":                   past,
+		"last_seen":                    time.Now().UTC().Format(time.RFC3339),
+		"management_url":               nil,
+		"non_subscriptions":            map[string]any{},
+		"original_app_user_id":         userID,
 		"original_application_version": nil,
-		"original_purchase_date":     past,
-		"other_purchases":            map[string]any{},
-		"subscriptions":              subscriptions,
+		"original_purchase_date":       past,
+		"other_purchases":              map[string]any{},
+		"subscriptions":                subscriptions,
 	}
 }
 
@@ -94,6 +116,10 @@ func subscriberPayload(userID string) map[string]any {
 type RemoteConfig struct {
 	Entries map[string]any
 	Version string
+	// Full là payload đã bóc từ module (mở khoá toàn bộ).
+	Full map[string]any
+	// Raw trả nguyên phản hồi thật khi client chưa được xác thực Gold.
+	PassHandler http.HandlerFunc
 }
 
 // NewRemoteConfig nạp entries từ JSON đã trích xuất từ repo mhale.

@@ -2,11 +2,13 @@
 package httpapi
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,6 +23,7 @@ import (
 	"github.com/PhTrien/app/internal/mitm"
 	"github.com/PhTrien/app/internal/mock"
 	"github.com/PhTrien/app/internal/pki"
+	"github.com/PhTrien/app/internal/store"
 )
 
 // Server là http.Handler gốc, phân nhánh theo Host.
@@ -37,6 +40,7 @@ type Server struct {
 	Logger   *log.Logger
 	Version  string
 	Started  time.Time
+	Store    *store.Store
 }
 
 // ServeHTTP chọn nhánh xử lý theo tên miền trong request.
@@ -75,6 +79,10 @@ func (s *Server) servePublic(w http.ResponseWriter, r *http.Request) {
 		s.handleFilter(w, r)
 	case isCaptionPath(r.URL.Path):
 		s.handleCaption(w, r)
+	case r.URL.Path == "/kich-hoat" || r.URL.Path == "/activate":
+		s.serveActivate(w, r)
+	case strings.HasPrefix(r.URL.Path, "/admin"):
+		s.serveAdmin(w, r)
 	case r.URL.Path == "/" || r.URL.Path == "/index.html":
 		s.serveLanding(w, r)
 	default:
@@ -85,12 +93,13 @@ func (s *Server) servePublic(w http.ResponseWriter, r *http.Request) {
 func (s *Server) serveMITM(w http.ResponseWriter, r *http.Request, host string) {
 	switch {
 	case host == "api.revenuecat.com":
-		if strings.Contains(r.URL.Path, "receipts") {
-			mock.Receipt(w, r)
+		s.serveRevenueCat(w, r)
+	case host == "firebaseremoteconfig.googleapis.com":
+		if s.Cfg.GateRemoteConfig && s.Store != nil && !s.Store.GoldIPRecent(clientIP(r), 6*time.Hour) {
+			// Client chưa xác thực Gold: trả cấu hình gốc của Firebase.
+			s.Upstream.Forward(w, r)
 			return
 		}
-		mock.Gold(w, r)
-	case host == "firebaseremoteconfig.googleapis.com":
 		s.RC.ServeHTTP(w, r)
 	case isFilterPath(r.URL.Path):
 		s.handleFilter(w, r)
@@ -100,6 +109,55 @@ func (s *Server) serveMITM(w http.ResponseWriter, r *http.Request, host string) 
 		// Mọi request khác (feed, upload, ảnh...) đi thẳng ra server thật.
 		s.Upstream.Forward(w, r)
 	}
+}
+
+// serveRevenueCat chỉ trả Gold cho username nằm trong danh sách đã kích;
+// các tài khoản khác được chuyển nguyên request ra RevenueCat thật.
+func (s *Server) serveRevenueCat(w http.ResponseWriter, r *http.Request) {
+	if s.Store == nil {
+		mock.Gold(w, r)
+		return
+	}
+	id := subscriberIDFromPath(r.URL.Path)
+
+	if strings.Contains(r.URL.Path, "receipts") {
+		var raw []byte
+		if r.Body != nil {
+			raw, _ = io.ReadAll(io.LimitReader(r.Body, 1<<20))
+			r.Body = io.NopCloser(bytes.NewReader(raw))
+		}
+		var in struct {
+			AppUserID string `json:"app_user_id"`
+		}
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &in)
+		}
+		if in.AppUserID == "" {
+			in.AppUserID = id
+		}
+		if u, ok := s.Store.GoldFor(in.AppUserID); ok {
+			s.Store.RecordHit(u.Key)
+			s.Store.MarkGoldIP(clientIP(r))
+			mock.ReceiptFor(w, in.AppUserID, u.Expires)
+			return
+		}
+		if in.AppUserID != "" {
+			s.Store.RecordSeen(in.AppUserID, r.UserAgent())
+		}
+		s.Upstream.Forward(w, r)
+		return
+	}
+
+	if u, ok := s.Store.GoldFor(id); ok {
+		s.Store.RecordHit(u.Key)
+		s.Store.MarkGoldIP(clientIP(r))
+		mock.GoldUntil(w, r, id, u.Expires)
+		return
+	}
+	if id != "" {
+		s.Store.RecordSeen(id, r.UserAgent())
+	}
+	s.Upstream.Forward(w, r)
 }
 
 func isFilterPath(p string) bool {
@@ -286,6 +344,37 @@ func userKey(r *http.Request) string {
 	}
 	sum := sha1.Sum([]byte(auth))
 	return hex.EncodeToString(sum[:8])
+}
+
+// subscriberIDFromPath lấy app_user_id trong /v1/subscribers/<id>.
+func subscriberIDFromPath(path string) string {
+	i := strings.Index(path, "/subscribers/")
+	if i < 0 {
+		return ""
+	}
+	id := path[i+len("/subscribers/"):]
+	if j := strings.Index(id, "/"); j >= 0 {
+		id = id[:j]
+	}
+	return strings.Trim(id, "/")
+}
+
+// clientIP lấy IP thật của client (đi qua Cloudflare/nginx thì đọc header).
+func clientIP(r *http.Request) string {
+	if v := r.Header.Get("CF-Connecting-IP"); v != "" {
+		return v
+	}
+	if v := r.Header.Get("X-Forwarded-For"); v != "" {
+		if i := strings.Index(v, ","); i > 0 {
+			return strings.TrimSpace(v[:i])
+		}
+		return strings.TrimSpace(v)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 func stripPort(host string) string {

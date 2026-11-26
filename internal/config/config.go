@@ -17,18 +17,23 @@ type TLS struct {
 
 // Config là toàn bộ cấu hình chạy server.
 type Config struct {
-	Host        string   `json:"host"`          // tên miền DoH, ví dụ doh.mhale.io.vn
-	ServerIP    string   `json:"server_ip"`     // IP công khai của VPS
-	Listen      string   `json:"listen"`        // mặc định ":443"
-	DataDir     string   `json:"data_dir"`      // mặc định /var/lib/locket-gold
-	UpstreamDNS string   `json:"upstream_dns"`  // 1.1.1.1:53
-	MappedHosts []string `json:"mapped_hosts"`  // domain trỏ về VPS qua DoH
-	CertHosts   []string `json:"cert_hosts"`    // domain có trong SAN của chứng chỉ MITM
-	TLS         TLS      `json:"tls"`           // cert Let's Encrypt cho tên miền DoH
-	LogRequests bool     `json:"log_requests"`  // ghi log request
-	CAName      string   `json:"ca_name"`       // tên hiển thị của Root CA
-	PublicDir   string   `json:"public_dir"`    // thư mục ảnh filter đã render
-	MaxImageMB  int      `json:"max_image_mb"`  // giới hạn ảnh tải về
+	Host        string   `json:"host"`         // tên miền DoH, ví dụ doh.mhale.io.vn
+	ServerIP    string   `json:"server_ip"`    // IP công khai của VPS
+	Listen      string   `json:"listen"`       // mặc định ":443"
+	DataDir     string   `json:"data_dir"`     // mặc định /var/lib/locket-gold
+	UpstreamDNS string   `json:"upstream_dns"` // 1.1.1.1:53
+	MappedHosts []string `json:"mapped_hosts"` // domain trỏ về VPS qua DoH
+	CertHosts   []string `json:"cert_hosts"`   // domain có trong SAN của chứng chỉ MITM
+	TLS         TLS      `json:"tls"`          // cert Let's Encrypt cho tên miền DoH
+	LogRequests bool     `json:"log_requests"` // ghi log request
+	CAName      string   `json:"ca_name"`      // tên hiển thị của Root CA
+	PublicDir   string   `json:"public_dir"`   // thư mục ảnh filter đã render
+	MaxImageMB  int      `json:"max_image_mb"` // giới hạn ảnh tải về
+
+	AdminUser        string `json:"admin_user"`         // tên đăng nhập trang admin
+	AdminPassword    string `json:"admin_password"`     // mật khẩu admin (đổi được trong /admin)
+	SessionHours     int    `json:"session_hours"`      // thời hạn phiên đăng nhập admin
+	GateRemoteConfig bool   `json:"gate_remote_config"` // chỉ mở remote config cho IP đã xác thực Gold
 
 	path string
 }
@@ -56,16 +61,18 @@ var CertHosts = []string{
 // Default trả về cấu hình mặc định.
 func Default() *Config {
 	return &Config{
-		Host:        "doh.example.com",
-		ServerIP:    "127.0.0.1",
-		Listen:      ":443",
-		DataDir:     "/var/lib/locket-gold",
-		UpstreamDNS: "1.1.1.1:53",
-		MappedHosts: append([]string{}, DefaultHosts...),
-		CertHosts:   append([]string{}, CertHosts...),
-		LogRequests: true,
-		CAName:      "Locket Gold CA",
-		MaxImageMB:  30,
+		Host:         "doh.example.com",
+		ServerIP:     "127.0.0.1",
+		Listen:       ":443",
+		DataDir:      "/var/lib/locket-gold",
+		UpstreamDNS:  "1.1.1.1:53",
+		MappedHosts:  append([]string{}, DefaultHosts...),
+		CertHosts:    append([]string{}, CertHosts...),
+		LogRequests:  true,
+		CAName:       "Locket Gold CA",
+		MaxImageMB:   30,
+		AdminUser:    "admin",
+		SessionHours: 24,
 	}
 }
 
@@ -101,6 +108,12 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.CAName == "" {
 		cfg.CAName = "Locket Gold CA"
+	}
+	if cfg.AdminUser == "" {
+		cfg.AdminUser = "admin"
+	}
+	if cfg.SessionHours <= 0 {
+		cfg.SessionHours = 24
 	}
 	cfg.path = path
 	return cfg, nil

@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/PhTrien/app/internal/catalog"
 	"github.com/PhTrien/app/internal/config"
 	"github.com/PhTrien/app/internal/filters"
+	"github.com/PhTrien/app/internal/store"
 )
 
 // selftestCmd chạy kiểm tra end-to-end ngay trên máy chủ (không cần iPhone).
@@ -48,6 +50,7 @@ func selftestCmd(args []string) {
 	cfg.ServerIP = "127.0.0.1"
 	cfg.DataDir = filepath.Join(tmp, "data")
 	cfg.LogRequests = false
+	cfg.AdminPassword = "selftest-pass"
 
 	logger := log.New(io.Discard, "", 0)
 	b, err := buildBundle(cfg, logger)
@@ -91,8 +94,8 @@ func selftestCmd(args []string) {
 	q := new(dns.Msg)
 	q.SetQuestion("api.revenuecat.com.", dns.TypeA)
 	packed, _ := q.Pack()
-	url := ts.URL + "/dns-query?dns=" + base64.RawURLEncoding.EncodeToString(packed)
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	dohURL := ts.URL + "/dns-query?dns=" + base64.RawURLEncoding.EncodeToString(packed)
+	req, _ := http.NewRequest(http.MethodGet, dohURL, nil)
 	req.Host = cfg.Host
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -112,23 +115,50 @@ func selftestCmd(args []string) {
 		}
 	}
 
-	// 4. RevenueCat mock
-	rcResp := doRequest(ts, cfg.Host, "api.revenuecat.com", "/v1/subscribers/test-user", nil)
+	// 4. Tạo mã + kích Gold theo username
+	codes, err := b.srv.Store.CreateCodes(store.CreateOptions{Count: 1, Days: 30, MaxUses: 1, Note: "selftest"})
+	if err != nil || len(codes) == 0 {
+		fail("tạo mã kích hoạt", err)
+	}
+	code := codes[0].Code
+	u, err := b.srv.Store.Redeem(code, "@selftest.user")
+	if err != nil {
+		fail("kích Gold bằng mã", err)
+	} else {
+		pass("kích Gold bằng mã", fmt.Sprintf("%s → @%s (hạn %s)", code, u.Name, u.Expires.Format("02/01/2006")))
+	}
+	if _, reused := b.srv.Store.Redeem(code, "nguoikhac"); reused == nil {
+		fail("mã chỉ dùng 1 lần", fmt.Errorf("vẫn kích được lần 2"))
+	} else {
+		pass("mã chỉ dùng 1 lần", reused.Error())
+	}
+
+	// 5. RevenueCat: username đã kích được trả Gold, username lạ thì không
+	rcResp := doRequest(ts, cfg.Host, "api.revenuecat.com", "/v1/subscribers/selftest.user", nil)
 	var rcBody struct {
 		Subscriber struct {
-			Entitlements map[string]any `json:"entitlements"`
+			Entitlements map[string]struct {
+				Expires string `json:"expires_date"`
+			} `json:"entitlements"`
 			Subscriptions map[string]any `json:"subscriptions"`
 		} `json:"subscriber"`
 	}
 	if err := json.Unmarshal(rcResp, &rcBody); err != nil {
 		fail("RevenueCat JSON", err)
-	} else if _, has := rcBody.Subscriber.Entitlements["Gold"]; !has {
-		fail("RevenueCat có Gold", fmt.Errorf("thiếu entitlement"))
+	} else if ent, has := rcBody.Subscriber.Entitlements["Gold"]; !has {
+		fail("RevenueCat có Gold cho username đã kích", fmt.Errorf("thiếu entitlement: %s", trim(string(rcResp), 90)))
+	} else if strings.HasPrefix(ent.Expires, "9999") {
+		fail("hạn Gold theo mã", fmt.Errorf("vẫn là vĩnh viễn"))
 	} else {
-		pass("RevenueCat Gold", fmt.Sprintf("%d subscription", len(rcBody.Subscriber.Subscriptions)))
+		pass("RevenueCat Gold theo username", fmt.Sprintf("%d subscription, hạn %s", len(rcBody.Subscriber.Subscriptions), ent.Expires[:10]))
+	}
+	if _, okGold := b.srv.Store.GoldFor("nguoi.chua.kich"); okGold {
+		fail("username chưa kích không có Gold", fmt.Errorf("vẫn trả Gold"))
+	} else {
+		pass("username chưa kích", "đi thẳng ra RevenueCat thật")
 	}
 
-	// 5. Firebase Remote Config
+	// 6. Firebase Remote Config
 	rfResp := doRequest(ts, cfg.Host, "firebaseremoteconfig.googleapis.com", "/v1/projects/x/namespaces/firebase:fetch", []byte(`{}`))
 	var rc struct {
 		Entries map[string]any `json:"entries"`
@@ -144,7 +174,7 @@ func selftestCmd(args []string) {
 		pass("Remote Config", fmt.Sprintf("%d entry, state=%s", len(rc.Entries), rc.State))
 	}
 
-	// 6. Catalog
+	// 7. Catalog
 	cat, err := catalog.Load(assets.EntriesJSON)
 	if err != nil {
 		fail("catalog filter", err)
@@ -152,7 +182,7 @@ func selftestCmd(args []string) {
 		pass("catalog filter", fmt.Sprintf("%d filter / %d nhóm", len(cat.Order), len(cat.Groups)))
 	}
 
-	// 7. Render filter (dùng ảnh test nội bộ)
+	// 8. Render filter (dùng ảnh test nội bộ)
 	srcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		img := image.NewRGBA(image.Rect(0, 0, 800, 1000))
 		for y := 0; y < 1000; y++ {
@@ -201,7 +231,7 @@ func selftestCmd(args []string) {
 		}
 	}
 
-	// 8. PhotoBooth cần nhiều ảnh → pending rồi đủ
+	// 9. PhotoBooth cần nhiều ảnh → pending rồi đủ
 	pbID := ""
 	for _, id := range b.srv.Catalog.Order {
 		f, _ := b.srv.Catalog.Get(id)
@@ -222,7 +252,7 @@ func selftestCmd(args []string) {
 		}
 	}
 
-	// 9. Caption
+	// 10. Caption
 	capResp := doRequest(ts, cfg.Host, "api.locketcamera.com", "/generateCaption",
 		[]byte(`{"data":{"image_base64":"aGVsbG8=","prompt":"ảnh đi biển"}}`))
 	var capBody struct {
@@ -234,6 +264,76 @@ func selftestCmd(args []string) {
 		fail("generateCaption", fmt.Errorf("không có caption: %s", trim(string(capResp), 80)))
 	} else {
 		pass("generateCaption", capBody.Result.Caption)
+	}
+
+	// 11. Trang kích hoạt + trang admin
+	actCode, _ := b.srv.Store.CreateCodes(store.CreateOptions{Count: 1, Days: 365, MaxUses: 1})
+	if len(actCode) > 0 {
+		form := url.Values{}
+		form.Set("username", "khach.moi")
+		form.Set("code", actCode[0].Code)
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/kich-hoat", strings.NewReader(form.Encode()))
+		req.Host = cfg.Host
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			fail("trang kích hoạt", err)
+		} else {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if !strings.Contains(string(body), "Kích hoạt thành công") {
+				fail("trang kích hoạt", fmt.Errorf("không thấy xác nhận: %s", trim(string(body), 80)))
+			} else {
+				pass("trang /kich-hoat", "kích thành công @khach.moi")
+			}
+		}
+	}
+
+	loginForm := url.Values{}
+	loginForm.Set("password", cfg.AdminPassword)
+	loginReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/admin/login", strings.NewReader(loginForm.Encode()))
+	loginReq.Host = cfg.Host
+	loginReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	jarClient := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	loginResp, err := jarClient.Do(loginReq)
+	if err != nil {
+		fail("đăng nhập admin", err)
+	} else {
+		var cookie string
+		for _, c := range loginResp.Cookies() {
+			if c.Name == "lg_admin" {
+				cookie = c.Value
+			}
+		}
+		loginResp.Body.Close()
+		if cookie == "" {
+			fail("đăng nhập admin", fmt.Errorf("không có cookie, mã %d", loginResp.StatusCode))
+		} else {
+			admReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/admin?tab=codes", nil)
+			admReq.Host = cfg.Host
+			admReq.AddCookie(&http.Cookie{Name: "lg_admin", Value: cookie})
+			admResp, err := http.DefaultClient.Do(admReq)
+			if err != nil {
+				fail("trang admin", err)
+			} else {
+				body, _ := io.ReadAll(admResp.Body)
+				admResp.Body.Close()
+				if !strings.Contains(string(body), "Tạo mã kích hoạt") {
+					fail("trang admin", fmt.Errorf("thiếu giao diện: %s", trim(string(body), 80)))
+				} else {
+					pass("trang /admin", fmt.Sprintf("%d bytes, đăng nhập + danh sách mã", len(body)))
+				}
+			}
+		}
+	}
+
+	landResp := doRequest(ts, cfg.Host, cfg.Host, "/", nil)
+	if !strings.Contains(string(landResp), "LOCKET") {
+		fail("landing page", fmt.Errorf("không render"))
+	} else {
+		pass("landing page", fmt.Sprintf("%d bytes", len(landResp)))
 	}
 
 	fmt.Println()
@@ -271,4 +371,3 @@ func trim(s string, n int) string {
 	}
 	return string([]rune(s)[:n]) + "…"
 }
-

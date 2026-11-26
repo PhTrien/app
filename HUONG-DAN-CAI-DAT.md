@@ -118,9 +118,17 @@ Script sẽ làm tuần tự:
 2. Tạo `Root CA` (hạn 10 năm) + chứng chỉ server + profile `.mobileconfig`
 3. (nếu có `--email`) xin chứng chỉ Let's Encrypt cho tên miền DoH
 4. Tạo service `systemd` và bật chạy 24/7
-5. Chạy tự kiểm tra 10 mục
+5. Chạy tự kiểm tra 16 mục
 
-Kết quả đúng sẽ có dòng cuối:
+Cuối phần `locket-gold init` sẽ in ra:
+
+```
+Trang quản trị : https://doh.mhale.io.vn/admin
+Mật khẩu admin : XXXXXXXXXXXX
+```
+
+**Lưu lại mật khẩu này** — dùng để vào trang quản trị tạo mã kích hoạt. Kết quả đúng của installer
+là dòng cuối:
 
 ```
 KẾT QUẢ: OK — server sẵn sàng.
@@ -144,14 +152,20 @@ Ví dụ đầu ra:
 
 ```
   ✓ chứng chỉ server do CA ký              Locket Gold CA
-  ✓ profile .mobileconfig                  3709 bytes, 5 domain
+  ✓ profile .mobileconfig                  3657 bytes, 4 domain
   ✓ DoH api.revenuecat.com                 → IP_VPS
-  ✓ RevenueCat Gold                        1 subscription
+  ✓ kích Gold bằng mã                      LG-XXXX-XXXX → @selftest.user
+  ✓ mã chỉ dùng 1 lần                      mã này đã dùng hết lượt
+  ✓ RevenueCat Gold theo username          1 subscription, hạn 2026-12-26
+  ✓ username chưa kích                     đi thẳng ra RevenueCat thật
   ✓ Remote Config                          179 entry, state=UPDATE_AVAILABLE
   ✓ catalog filter                         296 filter / 17 nhóm
   ✓ render filter ai_tai_tho               1080x1080, khung=true
   ✓ photobooth pb_khung4_merry_christmas   pending 1/4 → 2/4 đúng
   ✓ generateCaption                        ...
+  ✓ trang /kich-hoat                       kích thành công @khach.moi
+  ✓ trang /admin                           đăng nhập + danh sách mã
+  ✓ landing page                           21718 bytes
 KẾT QUẢ: OK — server sẵn sàng.
 ```
 
@@ -223,7 +237,65 @@ Không còn cảnh báo chứng chỉ là đúng.
 
 ---
 
-## 8. Kiểm tra tính năng
+## 8. Kích hoạt Gold: tạo mã và cấp cho khách
+
+Gold được bật **theo username**, nên mỗi khách cần một mã.
+
+### 8.1 Vào trang quản trị
+
+Mở: `https://doh.mhale.io.vn/admin` → nhập mật khẩu admin (in ra ở bước 4).
+
+Quên mật khẩu:
+
+```bash
+locket-gold admin reset --password MATKHAU_MOI
+```
+
+### 8.2 Tạo mã
+
+Tab **Mã kích hoạt**:
+
+| Ô | Ý nghĩa |
+|---|---|
+| Số lượng | tạo 1 lần bao nhiêu mã (tối đa 200) |
+| Thời hạn Gold | 7 / 30 / 90 / 180 / 365 ngày hoặc **Vĩnh viễn** |
+| Số lượt dùng / mã | 1 = một người dùng; >1 = dùng chung được nhiều người |
+| Ghi chú | để bạn tự nhớ (khách Zalo, đợt 1…) |
+| Mã tự đặt | bỏ trống = hệ thống sinh `LG-XXXX-XXXX`; điền = dùng đúng mã bạn muốn, ví dụ `TET2026` |
+| Hạn của mã | mã hết hiệu lực sau bao nhiêu ngày (0 = không hạn) |
+
+Bấm **Tạo mã** → mã hiện ngay trong bảng, nút **Copy** để gửi khách.
+
+### 8.3 Khách kích hoạt
+
+Gửi khách: link `https://doh.mhale.io.vn/kich-hoat` + mã.
+
+Khách nhập:
+- **Username Locket** — phần sau `locket.cam/` (dán nguyên link cũng được, hệ thống tự tách).
+- **Mã** — `LG-XXXX-XXXX`.
+
+Bấm **Kích hoạt ngay** → hiện hạn Gold. Mở lại Locket là có Gold.
+
+### 8.4 Quản lý người dùng
+
+Tab **Người dùng**: danh sách username đã kích, hạn, số lần app gọi, nút **+30 ngày**, **Vĩnh viễn**,
+**Thu hồi** (Gold tắt ngay), **Xoá**.
+
+### 8.5 Khách không biết username
+
+Mở Locket trên máy khách một lần → vào tab **ID đã thấy**, server đã ghi lại ID thật app gọi lên.
+Bấm **Kích 1 năm** để map trực tiếp ID đó (kèm ghi chú).
+
+### 8.6 Nguyên tắc hoạt động
+
+- Username **có** trong danh sách → server trả `entitlements.Gold` đúng hạn của mã.
+- Username **không** có → request đi nguyên ra `api.revenuecat.com` thật (không bị ảnh hưởng).
+- Hết hạn → Gold tự tắt, không cần thao tác.
+- Dữ liệu: `/var/lib/locket-gold/data/store.json` (quyền 0600).
+
+---
+
+## 9. Kiểm tra tính năng
 
 **Gold:** mở Locket → mục Gold/Profile badge/Video dài 60s → dùng được.
 
@@ -242,13 +314,14 @@ journalctl -u locket-gold -f
 
 ---
 
-## 9. Vận hành
+## 10. Vận hành
 
 ```bash
 systemctl restart locket-gold     # khởi động lại
 systemctl stop locket-gold        # dừng
 journalctl -u locket-gold -n 100  # 100 dòng log cuối
 locket-gold ca show               # xem tên + hạn của Root CA
+locket-gold admin reset --password MATKHAU_MOI   # đổi mật khẩu trang quản trị
 ```
 
 **Cập nhật phiên bản mới (giữ nguyên dữ liệu, CA, profile):**
@@ -265,7 +338,9 @@ sudo bash scripts/install.sh --upgrade
 tar -czf /root/locket-gold-backup-$(date +%F).tar.gz /etc/locket-gold /var/lib/locket-gold
 ```
 
-Trong đó `/var/lib/locket-gold/ca/` là **Root CA** — mất là mọi máy phải cài lại profile.
+Trong đó:
+- `/var/lib/locket-gold/ca/` là **Root CA** — mất là mọi máy phải cài lại profile.
+- `/var/lib/locket-gold/data/store.json` là **danh sách username Gold + mã kích hoạt** — mất là phải cấp lại mã.
 
 **Gỡ cài đặt (giữ dữ liệu):**
 
@@ -284,7 +359,7 @@ systemctl restart locket-gold
 
 ---
 
-## 10. Xử lý sự cố
+## 11. Xử lý sự cố
 
 | Hiện tượng | Nguyên nhân thường gặp | Cách xử lý |
 |---|---|---|
@@ -298,6 +373,11 @@ systemctl restart locket-gold
 | `selftest` lỗi mục “render filter” | VPS không ra được Internet (khung tải từ huggingface) | `curl -I https://huggingface.co` — mở outbound hoặc đổi mạng |
 | DoH trả 404 | gọi sai path | đúng là `/dns-query` |
 | Muốn xem có ai đang dùng | log mỗi request | bật `"log_requests": true` trong `/etc/locket-gold/config.json` |
+| Nhập mã báo “mã không tồn tại” | gõ sai / mã đã xoá | copy lại đúng mã trong tab Mã kích hoạt |
+| Nhập mã báo “đã dùng hết lượt” | mã đặt số lượt = 1 | tạo mã mới hoặc kích tay trong tab Người dùng |
+| Đã kích mà Locket vẫn không Gold | app đang cache trạng thái cũ | tắt hẳn Locket rồi mở lại; kiểm tra username đúng chưa ở tab Người dùng |
+| Không đăng nhập được /admin | quên mật khẩu | `locket-gold admin reset --password MATKHAU_MOI` |
+| Vào /admin bị quay lại trang đăng nhập | mở bằng `http://` nên cookie `Secure` bị bỏ | luôn dùng `https://` |
 
 Xem cấu hình hiện tại:
 
@@ -307,21 +387,25 @@ cat /etc/locket-gold/config.json
 
 ---
 
-## 11. Bảo mật & lưu ý
+## 12. Bảo mật & lưu ý
 
 - **Root CA là tài sản nhạy cảm.** Ai có `ca.key` đều có thể giả lập mọi trang HTTPS với máy đã tin cậy CA đó.
   Không chia sẻ thư mục `/var/lib/locket-gold/ca/`, không đưa lên GitHub.
 - Repo này **không chứa key, CA hay mật khẩu** — chỉ mã nguồn và binary.
 - Server chỉ mở đúng những gì cần: DoH công khai + MITM cho 5 domain Locket.
   Request lạ tới `api.locketcamera.com/…` được chuyển nguyên vẹn ra server thật, không đọc nội dung.
-- Nếu dùng cho nhóm bạn: mỗi người cài cùng 1 profile; muốn giới hạn người dùng thì chặn theo
-  `Authorization` ở tầng proxy (chưa có sẵn trong bản 1.0.0).
+- Giới hạn người dùng đã có sẵn: Gold chỉ bật cho username nằm trong danh sách kích hoạt
+  (tab **Người dùng**). Người lạ cài profile vẫn dùng Locket bình thường nhưng không có Gold.
+- Mật khẩu admin lưu dạng băm trong `store.json`; bản trong `config.json` chỉ để đăng nhập lần đầu,
+  đổi bằng `locket-gold admin reset`.
+- Nếu lộ mã: tab **Mã kích hoạt** → **Thu hồi**. Người đã kích vẫn giữ Gold tới hết hạn;
+  muốn tắt ngay thì **Thu hồi** ở tab Người dùng.
 
 ---
 
-## 12. Phụ lục
+## 13. Phụ lục
 
-### 12.1 Cài thủ công (không dùng install.sh)
+### 13.1 Cài thủ công (không dùng install.sh)
 
 ```bash
 install -m 0755 bin/locket-gold-linux-amd64 /usr/local/bin/locket-gold
@@ -350,7 +434,7 @@ WantedBy=multi-user.target
 systemctl daemon-reload && systemctl enable --now locket-gold
 ```
 
-### 12.2 Build từ mã nguồn (nếu không dùng binary có sẵn)
+### 13.2 Build từ mã nguồn (nếu không dùng binary có sẵn)
 
 ```bash
 apt install -y golang-go
@@ -358,7 +442,7 @@ cd /opt/locket-gold
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /usr/local/bin/locket-gold ./cmd/locket-gold
 ```
 
-### 12.3 Cấu hình mặc định (`/etc/locket-gold/config.json`)
+### 13.3 Cấu hình mặc định (`/etc/locket-gold/config.json`)
 
 ```json
 {
@@ -390,7 +474,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /usr/local/bin/locket-gold 
 }
 ```
 
-### 12.4 Dữ liệu nằm ở đâu
+### 13.4 Dữ liệu nằm ở đâu
 
 | Đường dẫn | Nội dung |
 |---|---|
