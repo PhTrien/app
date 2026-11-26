@@ -1,0 +1,5 @@
+# dữ liệu chạy
+data/
+*.log
+*.tmp
+.DS_Store
