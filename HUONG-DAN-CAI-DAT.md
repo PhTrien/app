@@ -217,7 +217,8 @@ Không còn cảnh báo chứng chỉ là đúng.
    (hoặc Cài đặt → Mạng) → thấy profile **Locket Gold DNS**.
 5. Mở **Locket** → vào phần Gold/Filters → thấy đã mở khoá.
 
-> Profile chỉ chuyển 5 domain Locket qua DoH của bạn (split-DNS).
+> Profile chỉ chuyển 4 domain Locket qua DoH của bạn (split-DNS). Riêng `cdn.locketcamera.com` (ảnh/thumbnail)
+> cố tình KHÔNG đi qua VPS để tiết kiệm băng thông — nó vẫn dùng mạng thường.
 > Facebook, YouTube, TikTok… vẫn dùng mạng bình thường, không bị ảnh hưởng tốc độ.
 
 ---
@@ -367,6 +368,12 @@ CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /usr/local/bin/locket-gold 
   "data_dir": "/var/lib/locket-gold",
   "upstream_dns": "1.1.1.1:53",
   "mapped_hosts": [
+    "api.revenuecat.com",
+    "firebaseremoteconfig.googleapis.com",
+    "us-central1-locket-4252a.cloudfunctions.net",
+    "api.locketcamera.com"
+  ],
+  "cert_hosts": [
     "api.revenuecat.com",
     "firebaseremoteconfig.googleapis.com",
     "us-central1-locket-4252a.cloudfunctions.net",

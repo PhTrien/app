@@ -23,6 +23,7 @@ type Config struct {
 	DataDir     string   `json:"data_dir"`      // mặc định /var/lib/locket-gold
 	UpstreamDNS string   `json:"upstream_dns"`  // 1.1.1.1:53
 	MappedHosts []string `json:"mapped_hosts"`  // domain trỏ về VPS qua DoH
+	CertHosts   []string `json:"cert_hosts"`    // domain có trong SAN của chứng chỉ MITM
 	TLS         TLS      `json:"tls"`           // cert Let's Encrypt cho tên miền DoH
 	LogRequests bool     `json:"log_requests"`  // ghi log request
 	CAName      string   `json:"ca_name"`       // tên hiển thị của Root CA
@@ -33,7 +34,18 @@ type Config struct {
 }
 
 // DefaultHosts là các domain cần MITM, đúng theo file .sgmodule của Mhale.
+//
+// cdn.locketcamera.com KHÔNG nằm trong danh sách trỏ về VPS: ảnh/thumbnail đi thẳng
+// ra CDN thật để không tốn băng thông VPS — nhưng vẫn có trong SAN của chứng chỉ.
 var DefaultHosts = []string{
+	"api.revenuecat.com",
+	"firebaseremoteconfig.googleapis.com",
+	"us-central1-locket-4252a.cloudfunctions.net",
+	"api.locketcamera.com",
+}
+
+// CertHosts mặc định = domain MITM + CDN.
+var CertHosts = []string{
 	"api.revenuecat.com",
 	"firebaseremoteconfig.googleapis.com",
 	"us-central1-locket-4252a.cloudfunctions.net",
@@ -50,6 +62,7 @@ func Default() *Config {
 		DataDir:     "/var/lib/locket-gold",
 		UpstreamDNS: "1.1.1.1:53",
 		MappedHosts: append([]string{}, DefaultHosts...),
+		CertHosts:   append([]string{}, CertHosts...),
 		LogRequests: true,
 		CAName:      "Locket Gold CA",
 		MaxImageMB:  30,
@@ -73,6 +86,9 @@ func Load(path string) (*Config, error) {
 	}
 	if len(cfg.MappedHosts) == 0 {
 		cfg.MappedHosts = append([]string{}, DefaultHosts...)
+	}
+	if len(cfg.CertHosts) == 0 {
+		cfg.CertHosts = append([]string{}, CertHosts...)
 	}
 	if cfg.Listen == "" {
 		cfg.Listen = ":443"

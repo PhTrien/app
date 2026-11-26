@@ -85,7 +85,7 @@ func buildBundle(cfg *config.Config, logger *log.Logger) (*bundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("khởi tạo CA: %w", err)
 	}
-	leaf, err := ca.Leaf(cfg.Dir("ca", "leaf"), cfg.MappedHosts, cfg.Host)
+	leaf, err := ca.Leaf(cfg.Dir("ca", "leaf"), cfg.CertHosts, cfg.Host)
 	if err != nil {
 		return nil, fmt.Errorf("tạo chứng chỉ server: %w", err)
 	}

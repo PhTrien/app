@@ -15,7 +15,7 @@ Dựa trên bộ script client của repo [`PhTrien/mhale`](https://github.com/P
 | **`/generateFilteredImage`** | Nhận JSON của app, tải ảnh gốc, **ghép khung PhotoBooth** (2/3/4 ảnh), **ghép overlay AI**, **chỉnh màu theo preset**, xuất JPEG 1080×1080 và trả `output_url` đúng schema app cần. |
 | **`/generateCaption`** | Sinh caption tiếng Việt theo ảnh + prompt (không cần API key ngoài). |
 | **Reverse proxy** | Mọi request khác của `api.locketcamera.com` được chuyển nguyên vẹn ra server thật, nên feed/đăng ảnh/nhắn tin vẫn hoạt động bình thường. |
-| **Profile `.mobileconfig`** | Tự sinh profile chứa Root CA + DoH split-DNS (5 domain) để cài trên iPhone. |
+| **Profile `.mobileconfig`** | Tự sinh profile chứa Root CA + DoH split-DNS (4 domain; CDN ảnh đi trực tiếp để tiết kiệm băng thông). |
 
 ## Cài nhanh
 
@@ -76,7 +76,8 @@ scripts/install.sh      cài đặt 1 lệnh
 
 - Cổng 443 dùng chung cho DoH và MITM, phân biệt bằng **SNI** → không cần 2 IP.
 - Chứng chỉ server có SAN cho: `api.revenuecat.com`, `firebaseremoteconfig.googleapis.com`,
-  `us-central1-locket-4252a.cloudfunctions.net`, `api.locketcamera.com`, `cdn.locketcamera.com`.
+  `us-central1-locket-4252a.cloudfunctions.net`, `api.locketcamera.com`, `cdn.locketcamera.com`
+  (CDN chỉ nằm trong SAN, không trỏ DoH về VPS → ảnh tải trực tiếp, không tốn băng thông).
 - Ảnh filter lưu ở `/var/lib/locket-gold/public/locket-filters/`, tên UUID 36 ký tự đúng như app yêu cầu
   (`/locket-filters/[0-9a-f-]{36}.jpg`).
 - Khung PhotoBooth/AI tải từ `huggingface.co` (đúng URL trong remote config) và cache ở `/var/lib/locket-gold/frames/`.
